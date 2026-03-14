@@ -28,7 +28,7 @@ REF_TEXT="You know what's interesting about this job - and I know everybody prob
 Automator Script
 
 ```
-#!/bin/zsh
+#!/bin/zsh#!/bin/zsh
 
 # Restore full PATH for Automator/launchd contexts
 export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
@@ -105,7 +105,8 @@ mkdir -p "$AUDIO_DIR"
 echo "[DEBUG] TTS Host: $TTS_HOST"
 echo "[DEBUG] Audio directory: $AUDIO_DIR"
 
-You know what's interesting about this job - and I know everybody probably tells you their whole life story, I'll keep it short - but you see the city different.
+REF_AUDIO="/Users/admin/Music/sample-audio-clips/jerome_city_geography_10s.wav"
+REF_TEXT="You know what's interesting about this job - and I know everybody probably tells you their whole life story, I'll keep it short - but you see the city different."
 
 # ---------------------------------------------------------------------------
 # Chunk text: every 400 chars (word boundary) OR every 2nd newline
