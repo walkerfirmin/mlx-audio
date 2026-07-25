@@ -285,7 +285,7 @@ _dispatch_tts() {
   local audio_file="${AUDIO_FILES[$idx]}"
 
   local json_payload=$(jq -n \
-    --arg model "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-6bit" \
+    --arg model "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit" \
     --arg input "$chunk_text" \
     --arg ref_audio "$REF_AUDIO" \
     --arg ref_text "$REF_TEXT" \
