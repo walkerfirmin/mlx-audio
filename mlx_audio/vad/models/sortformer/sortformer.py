@@ -1190,35 +1190,9 @@ class Model(nn.Module):
             right_ctx = None
             if all_pre_embs is not None and rc > 0:
                 # Figure out how many diar frames this chunk produces
-                chunk_emb_len = int(
-                    (
-                        mx.floor(
-                            (
-                                mx.floor(
-                                    (
-                                        mx.floor(
-                                            (
-                                                mx.array(
-                                                    [chunk_feat.shape[2]],
-                                                    dtype=mx.float32,
-                                                )
-                                                - 1
-                                            )
-                                            / 2
-                                        )
-                                        + 1
-                                        - 1
-                                    )
-                                    / 2
-                                )
-                                + 1
-                                - 1
-                            )
-                            / 2
-                        )
-                        + 1
-                    )[0].item()
-                )
+                chunk_emb_len = chunk_feat.shape[2]
+                for _ in range(3):
+                    chunk_emb_len = (chunk_emb_len - 1) // 2 + 1
                 rc_start = emb_offset + chunk_emb_len
                 rc_end = min(rc_start + rc, all_pre_embs.shape[1])
                 if rc_end > rc_start:
@@ -2027,17 +2001,13 @@ class Model(nn.Module):
 
     @staticmethod
     def _resample(waveform: mx.array, orig_sr: int, target_sr: int) -> mx.array:
-        """Resample audio using scipy (no librosa dependency)."""
+        """Resample audio to ``target_sr``."""
         if orig_sr == target_sr:
             return waveform
-        import numpy as np
-        from scipy import signal as scipy_signal
 
-        gcd = math.gcd(orig_sr, target_sr)
-        resampled = scipy_signal.resample_poly(
-            np.array(waveform), target_sr // gcd, orig_sr // gcd
-        ).astype(np.float32)
-        return mx.array(resampled)
+        from mlx_audio.utils import resample_audio
+
+        return resample_audio(waveform, orig_sr, target_sr)
 
     @staticmethod
     def sanitize(weights: Dict[str, mx.array]) -> Dict[str, mx.array]:

@@ -190,6 +190,18 @@ class Model(nn.Module):
         else:
             self._voice_neg_lm_cache = None
 
+        voice_arrays = [
+            self._voice_lm_hidden,
+            self._voice_tts_hidden,
+            self._voice_neg_tts_hidden,
+            *(x for pair in self._voice_lm_cache for x in pair),
+            *(x for pair in self._voice_tts_cache for x in pair),
+            *(x for pair in self._voice_neg_tts_cache for x in pair),
+        ]
+        if self._voice_neg_lm_cache is not None:
+            voice_arrays.extend(x for pair in self._voice_neg_lm_cache for x in pair)
+        mx.eval(*voice_arrays)
+
     def get_input_embeddings(self) -> nn.Embedding:
         """Get the token embedding layer."""
         return self.language_model.embed_tokens
@@ -250,8 +262,9 @@ class Model(nn.Module):
 
             # Check if key exists in model
             if new_key not in curr_shapes:
-                # Debug: uncomment to see missing keys
-                # print(f"Warning: Key {new_key} (from {k}) not found in model")
+                # Preserve quantization metadata -- model isn't quantized yet at sanitize time
+                if new_key.endswith((".scales", ".biases")):
+                    new_weights[new_key] = v
                 continue
 
             target_shape = curr_shapes[new_key]

@@ -1,11 +1,11 @@
 # Ported from https://github.com/resemble-ai/chatterbox
 
-import math
 from typing import Dict, Optional
 
 import mlx.core as mx
 import mlx.nn as nn
-from scipy import signal
+
+from mlx_audio.utils import resample_audio
 
 from .decoder import ConditionalDecoder
 from .f0_predictor import ConvRNNF0Predictor
@@ -15,21 +15,6 @@ from .hifigan import HiFTGenerator
 from .mel import mel_spectrogram
 from .transformer.upsample_encoder import UpsampleConformerEncoder
 from .xvector import CAMPPlus
-
-
-def resample_audio(audio: mx.array, orig_sr: int, target_sr: int) -> mx.array:
-    """Resample audio using scipy (numpy required for scipy)."""
-    if orig_sr == target_sr:
-        return audio
-    import numpy as np
-
-    audio_np = np.array(audio)
-    gcd = math.gcd(orig_sr, target_sr)
-    up = target_sr // gcd
-    down = orig_sr // gcd
-    resampled = signal.resample_poly(audio_np, up, down, padtype="edge")
-    return mx.array(resampled.astype(np.float32))
-
 
 # Constants
 S3GEN_SR = 24000
@@ -384,6 +369,16 @@ class S3Token2Wav(S3Token2Mel):
             # Same for up_embed
             new_key = re.sub(r"\.up_embed\.out\.0\.", r".up_embed.linear.", new_key)
             new_key = re.sub(r"\.up_embed\.out\.1\.", r".up_embed.norm.", new_key)
+
+            # === Conformer encoder block naming ===
+            # PyTorch stores the conformer blocks in nn.ModuleLists, so the block
+            # index is dotted (encoders.0, up_encoders.0). The MLX modules expose
+            # each block as an attribute (encoders_0, up_encoders_0). Without this
+            # rename every conformer weight is dropped by the should_keep filter
+            # below, and the blocks silently keep their random initialization.
+            # (Idempotent: already-converted underscore keys do not match.)
+            new_key = re.sub(r"\.up_encoders\.(\d+)\.", r".up_encoders_\1.", new_key)
+            new_key = re.sub(r"\.encoders\.(\d+)\.", r".encoders_\1.", new_key)
 
             # === HiFi-GAN F0 predictor naming (idempotent) ===
             # PyTorch Sequential indices: 0, 2, 4, 6, 8 -> MLX list indices: 0, 1, 2, 3, 4

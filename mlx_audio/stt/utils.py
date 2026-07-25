@@ -1,15 +1,59 @@
+import contextlib
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, List, Optional, Union
 
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
+from mlx.utils import tree_reduce
 
 from mlx_audio.utils import base_load_model, get_model_path, load_config
 
 SAMPLE_RATE = 16000
 
+
+@contextlib.contextmanager
+def wired_limit(model: nn.Module, streams: Optional[List[mx.Stream]] = None):
+    """
+    A context manager to temporarily change the wired limit.
+
+    Note, the wired limit should not be changed during an async eval.  If an
+    async eval could be running pass in the streams to synchronize with prior
+    to exiting the context manager.
+    """
+    if not mx.metal.is_available():
+        try:
+            yield
+        finally:
+            pass
+    else:
+        model_bytes = tree_reduce(
+            lambda acc, x: acc + x.nbytes if isinstance(x, mx.array) else acc, model, 0
+        )
+        max_rec_size = mx.metal.device_info()["max_recommended_working_set_size"]
+        if model_bytes > 0.9 * max_rec_size:
+            model_mb = model_bytes // 2**20
+            max_rec_mb = max_rec_size // 2**20
+            print(
+                f"[WARNING] Generating with a model that requires {model_mb} MB "
+                f"which is close to the maximum recommended size of {max_rec_mb} "
+                "MB. This can be slow. See the documentation for possible work-arounds: "
+                "https://github.com/ml-explore/mlx-lm/tree/main#large-models"
+            )
+        old_limit = mx.set_wired_limit(max_rec_size)
+        try:
+            yield
+        finally:
+            if streams is not None:
+                for s in streams:
+                    mx.synchronize(s)
+            else:
+                mx.synchronize()
+            mx.set_wired_limit(old_limit)
+
+
 MODEL_REMAPPING = {
+    "cohere_asr": "cohere_asr",
     "fireredasr2": "fireredasr2",
     "glm": "glmasr",
     "sensevoice": "sensevoice",
@@ -17,21 +61,24 @@ MODEL_REMAPPING = {
     "voxtral_realtime": "voxtral_realtime",
     "vibevoice": "vibevoice_asr",
     "qwen3_asr": "qwen3_asr",
+    "moss_transcribe_diarize": "moss_transcribe_diarize",
+    "fun_asr_nano": "fun_asr_nano",
     "canary": "canary",
     "moonshine": "moonshine",
     "mms": "mms",
     "granite_speech": "granite_speech",
+    "granite_speech_nar": "granite_speech_nar",
+    "qwen2_audio": "qwen2_audio",
+    "mega_asr": "mega_asr",
+    "higgs_audio_3": "higgs_audio_3",
+    "moss_music": "moss_music",
 }
 
 
 def resample_audio(audio: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
-    from scipy import signal
+    from mlx_audio.utils import resample_audio as _resample_audio
 
-    gcd = np.gcd(orig_sr, target_sr)
-    up = target_sr // gcd
-    down = orig_sr // gcd
-    resampled = signal.resample_poly(audio, up, down, padtype="edge")
-    return resampled
+    return _resample_audio(audio, orig_sr, target_sr, axis=0)
 
 
 def load_audio(
@@ -57,14 +104,15 @@ def load_audio(
     """
     from mlx_audio.audio_io import read as audio_read
 
-    audio, sample_rate = audio_read(file, always_2d=True)
-    if sample_rate != sr:
-        audio = resample_audio(audio, sample_rate, sr)
-    return mx.array(audio, dtype=dtype).mean(axis=1)
+    audio, _ = audio_read(file, dtype="float32", sample_rate=sr, nchannels=1)
+    return mx.array(audio, dtype=dtype)
 
 
 def load_model(
-    model_path: Union[str, Path], lazy: bool = False, strict: bool = False, **kwargs
+    model_path: Union[str, Path],
+    lazy: bool = False,
+    strict: bool = False,
+    **kwargs: Any,
 ) -> nn.Module:
     """
     Load and initialize an STT model from a given path.
@@ -89,7 +137,10 @@ def load_model(
 
 
 def load(
-    model_path: Union[str, Path], lazy: bool = False, strict: bool = False, **kwargs
+    model_path: Union[str, Path],
+    lazy: bool = False,
+    strict: bool = False,
+    **kwargs: Any,
 ) -> nn.Module:
     """
     Load a speech-to-text model from a local path or HuggingFace repository.
@@ -101,16 +152,11 @@ def load(
         model_path: The local path or HuggingFace repo ID to load from.
         lazy: If False, evaluate model parameters immediately.
         strict: If True, raise an error if any weights are missing.
-        **kwargs: Additional keyword arguments:
-            - revision (str): HuggingFace revision/branch to use
-            - force_download (bool): Force re-download of model files
+        **kwargs: Additional keyword arguments such as `revision` and
+            `force_download`.
 
     Returns:
         nn.Module: The loaded and initialized model.
 
-    Example:
-        >>> from mlx_audio.stt import load
-        >>> model = load("mlx-community/whisper-tiny-asr-fp16")
-        >>> result = model.generate(audio)
     """
     return load_model(model_path, lazy=lazy, strict=strict, **kwargs)

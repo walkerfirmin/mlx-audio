@@ -299,13 +299,6 @@ class LFM2AudioModel(nn.Module):
 
         weights = model.sanitize(weights)
 
-        for key, value in weights.items():
-            if value.dtype == mx.float32:
-                if "conv" in key or "norm" in key:
-                    continue
-                else:
-                    weights[key] = value.astype(mx.float16)
-
         if quantization:
             from ....convert import build_quant_predicate
 
@@ -461,6 +454,10 @@ class LFM2AudioModel(nn.Module):
                 sanitized[key] = (
                     value if check_array_shape(value) else value.transpose(0, 2, 3, 1)
                 )  # NCHW -> NHWC
+
+        for key, value in list(sanitized.items()):
+            if value.dtype == mx.float32 and "conv" not in key and "norm" not in key:
+                sanitized[key] = value.astype(mx.float16)
 
         return sanitized
 
@@ -868,6 +865,16 @@ class LFM2AudioModel(nn.Module):
                         audio_frame.shape, AUDIO_EOS_TOKEN, dtype=audio_frame.dtype
                     )
                     yield audio_frame.squeeze(0), LFMModality.AUDIO_OUT
+
+                    # Feed audio EOS back into the LFM state before resuming text.
+                    # Otherwise the next text token is sampled from stale pre-EOS state.
+                    next_emb = self._embed_audio_out(audio_frame)[:, None, :]
+                    last_hidden = self.lfm(
+                        inputs=None,
+                        cache=cache,
+                        input_embeddings=next_emb,
+                    )
+
                     generated += 1
                     # If text is done, break after final audio EOS
                     if text_done:

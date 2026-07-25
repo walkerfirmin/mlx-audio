@@ -1,16 +1,15 @@
 # Copyright (c) 2025, Prince Canuma and contributors (https://github.com/Blaizzy/mlx-audio)
 
-import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Generator, Optional, Union
 
-import librosa
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
-from scipy import signal
+
+from mlx_audio.utils import load_audio, resample_audio
 
 from ..base import GenerationResult
 from .config import ModelConfig
@@ -30,37 +29,6 @@ SPEECH_VOCAB_SIZE = 6561  # Size of speech token vocabulary
 SOT = "[START]"
 EOT = "[STOP]"
 SPACE = "[SPACE]"
-
-
-def resample_audio(audio: mx.array, orig_sr: int, target_sr: int) -> mx.array:
-    """
-    Resample audio to a target sample rate using scipy.
-
-    Args:
-        audio: Audio waveform as MLX array (samples,) or (channels, samples)
-        orig_sr: Original sample rate
-        target_sr: Target sample rate
-
-    Returns:
-        Resampled audio as MLX array
-    """
-    if orig_sr == target_sr:
-        return audio
-
-    # Convert to numpy for scipy
-    import numpy as np
-
-    audio_np = np.array(audio)
-
-    # Calculate resampling factors
-    gcd = math.gcd(orig_sr, target_sr)
-    up = target_sr // gcd
-    down = orig_sr // gcd
-
-    # Resample
-    resampled = signal.resample_poly(audio_np, up, down, padtype="edge")
-
-    return mx.array(resampled)
 
 
 def punc_norm(text: str) -> str:
@@ -450,7 +418,10 @@ class Model(nn.Module):
                     return False
                 # Check if we have quantized weights (scales) for this path
                 # Need to check in the appropriate weight dict based on prefix
-                if path.startswith("t3."):
+                if path.startswith("ve."):
+                    weight_path = path[3:]  # Remove "ve." prefix
+                    return f"{weight_path}.scales" in ve_weights
+                elif path.startswith("t3."):
                     weight_path = path[3:]  # Remove "t3." prefix
                     return f"{weight_path}.scales" in t3_weights
                 elif path.startswith("s3gen."):
@@ -495,6 +466,7 @@ class Model(nn.Module):
         s3tok_weights = mx.load(str(s3tok_path))
         model._s3_tokenizer = S3TokenizerV2("speech_tokenizer_v2_25hz")
         load_component_weights(model._s3_tokenizer, s3tok_weights, strict=False)
+        mx.eval(model._s3_tokenizer.parameters())
 
         # Initialize text tokenizer (check config for multilingual setting)
         tokenizer_path = ckpt_dir / "tokenizer.json"
@@ -525,6 +497,7 @@ class Model(nn.Module):
             model.tokenizer = None
 
         # Set to eval mode for inference (important for BatchNorm)
+        mx.eval(model.parameters(), model._s3_tokenizer.parameters())
         model.eval()
         print("Model loaded successfully!")
         return model
@@ -587,6 +560,7 @@ class Model(nn.Module):
             if hasattr(model._s3_tokenizer, "sanitize"):
                 s3tok_weights = model._s3_tokenizer.sanitize(s3tok_weights)
             model._s3_tokenizer.load_weights(list(s3tok_weights.items()), strict=False)
+            mx.eval(model._s3_tokenizer.parameters())
             print("Loaded S3Tokenizer weights")
         else:
             print(f"Warning: S3Tokenizer weights not found at {s3tok_path}")
@@ -626,6 +600,8 @@ class Model(nn.Module):
                 gen_dict["prompt_feat_len"] = mx.array([prompt_feat.shape[1]])
 
             model._conds = Conditionals(t3_cond, gen_dict)
+            cond_arrays = [speaker_emb, cond_tokens, emotion_adv, *gen_dict.values()]
+            mx.eval(*(x for x in cond_arrays if isinstance(x, mx.array)))
         else:
             print("Warning: conds.safetensors not found - ref_audio will be required")
             model._conds = None
@@ -658,8 +634,8 @@ class Model(nn.Module):
         """
         # Ensure 1D waveform
         if isinstance(ref_wav, str):
-            ref_wav, ref_sr = librosa.load(ref_wav, sr=S3GEN_SR)
-            ref_wav = mx.array(ref_wav)
+            ref_wav = load_audio(ref_wav, sample_rate=S3GEN_SR)
+            ref_sr = S3GEN_SR
 
         if ref_wav.ndim == 2:
             ref_wav = ref_wav.squeeze(0)
@@ -719,12 +695,20 @@ class Model(nn.Module):
         ve_embed = self.ve.embeds_from_wavs([ref_wav_16k_full], sample_rate=S3_SR)
         ve_embed = mx.mean(ve_embed, axis=0, keepdims=True)
 
+        emotion_adv = mx.ones((1, 1, 1)) * exaggeration
         t3_cond = T3Cond(
             speaker_emb=ve_embed,
             cond_prompt_speech_tokens=t3_cond_prompt_tokens,
-            emotion_adv=mx.ones((1, 1, 1)) * exaggeration,
+            emotion_adv=emotion_adv,
         )
 
+        cond_arrays = [
+            ve_embed,
+            t3_cond_prompt_tokens,
+            emotion_adv,
+            *s3gen_ref_dict.values(),
+        ]
+        mx.eval(*(x for x in cond_arrays if isinstance(x, mx.array)))
         return Conditionals(t3_cond, s3gen_ref_dict)
 
     @property

@@ -1,8 +1,12 @@
 from . import (
+    cohere_asr,
     fireredasr2,
     glmasr,
     granite_speech,
+    granite_speech_nar,
     lasr_ctc,
+    moss_music,
+    moss_transcribe_diarize,
     parakeet,
     qwen3_asr,
     sensevoice,
